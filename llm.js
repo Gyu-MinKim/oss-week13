@@ -2,12 +2,26 @@
 // The provider, the model and the key come from .env:
 //   process.env.LLM_BASE_URL, process.env.LLM_MODEL, process.env.LLM_API_KEY
 
+import { response } from "express";
+
 // TODO P4: make a constant SYSTEM here: the rules for every answer (tone, length, format).
 //          Then send it as the first message, before the user's message, in ask().
 const SYSTEM = 
   `말투는 존댓말(해요체)로 답한다.
   길이는 한 문단, 세 문장 이내로 답한다.
   형식으로는 목록, 제목, 굵은 글씨와 같은 마크다운을 쓰지 않는다.`;
+
+const SYSTEM_JSON = 
+`입력된 텍스트를 분석하고 JSON 객체로만 답한다.
+키는 sentiment, score, summary 세 개만 사용한다.
+sentiment는 "positive", "negative", "neutral" 중 하나이다.
+score는 후기의 만족도를 나타내며, 1 이상 5 이하의 정수이다.
+- 1: 매우 부정적인 후기
+- 2: 부정적인 후기
+- 3: 중립적인 후기
+- 4: 긍정적인 후기
+- 5: 매우 긍정적인 후기
+summary는 입력된 텍스트를 한 문장으로 요약한 문자열이다.`;
 
 // ask("a question")  ->  the model's answer, as a string
 export async function ask(question) {
@@ -26,9 +40,10 @@ export async function ask(question) {
       ],
     }),
   });
-  const data = await res.json();
   if(!res.ok)
     throw new Error(`LLM: HTTP ${res.status}`);
+
+  const data = await res.json();
 
   return data.choices[0].message.content.trim();
 }
@@ -52,10 +67,10 @@ export async function chat(history) {
     }),
   });
 
-  const data = await res.json();
-
   if (!res.ok)
     throw new Error(`LLM: HTTP ${res.status}`);
+
+  const data = await res.json();
 
   return data.choices[0].message.content.trim();
 }
@@ -64,5 +79,40 @@ export async function chat(history) {
 //   { sentiment: "positive" | "negative" | "neutral", score: 1..5, summary: "one short sentence" }
 export async function analyze(text) {
   // TODO P6: write this function (see problems/P6_json.md). Delete the throw line below.
-  throw new Error("analyze() is not written yet");
+  const res = await fetch(`${process.env.LLM_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.LLM_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.LLM_MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_JSON },
+        { role: "user", content: text },
+      ],
+      response_format: { type: "json_object" }
+    })
+  });
+
+  if(!res.ok)
+    throw new Error(`LLM: HTTP ${res.status}`);
+
+  const data = await res.json();
+
+  const { sentiment, score, summary } = JSON.parse(
+        data.choices[0].message.content.trim()
+    );
+
+    if (
+        !["positive", "negative", "neutral"].includes(sentiment) ||
+        !Number.isInteger(score) ||
+        score < 1 ||
+        score > 5 ||
+        typeof summary !== "string"
+    ) {
+        throw new Error("LLM: the answer has the wrong shape");
+    }
+
+  return { sentiment, score, summary };
 }
